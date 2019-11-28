@@ -27,12 +27,19 @@ extension Reactive where Base: FileHandle {
 	///   - scheduler: A run loop scheduler to perform the asynchronous file read.
 	///
 	/// - returns: A SignalProducer of the file's data.
-	public func readToEndOfFile(on scheduler: RunLoopScheduler) -> SignalProducer<Data, NoError> {
+	public func readToEndOfFile(on scheduler: RunLoopScheduler) -> SignalProducer<Data, AnyError> {
 		return SignalProducer { [base] observer, lifetime in
 			lifetime += NotificationCenter.default.reactive
 				.notifications(forName: .NSFileHandleReadToEndOfFileCompletion, object: base)
 				.take(first: 1)
-				.map { $0.userInfo![NSFileHandleNotificationDataItem] as! Data }
+				.attemptMap { notification -> Data in
+					let userInfo = notification.userInfo!
+					if let code = userInfo["NSFileHandleError"] as? Int {
+						throw NSError(domain: POSIXError.errorDomain, code: code)
+					} else {
+						return userInfo[NSFileHandleNotificationDataItem] as! Data
+					}
+				}
 				.observe(observer)
 
 			base.readToEndOfFileInBackgroundAndNotify()

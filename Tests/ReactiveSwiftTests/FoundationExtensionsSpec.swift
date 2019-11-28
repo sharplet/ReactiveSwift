@@ -18,6 +18,16 @@ extension Notification.Name {
 	static let racAnother = Notification.Name(rawValue: "rac_notifications_another")
 }
 
+func matchErrorCode<Code: _ErrorCodeProtocol>(_ code: Code) -> Predicate<Error> {
+	return Predicate { expression in
+		let error = try expression.evaluate()!
+		return PredicateResult(
+			bool: code ~= error,
+			message: .expectedActualValueTo("match error <\(Code._ErrorType(code)._nsError)>")
+		)
+	}.requireNonNil
+}
+
 class FoundationExtensionsSpec: QuickSpec {
 	override func spec() {
 		describe("NotificationCenter.reactive.notifications") {
@@ -83,6 +93,71 @@ class FoundationExtensionsSpec: QuickSpec {
 
 				expect(isDisposed) == false
 				expect(signal).to(beNil())
+			}
+		}
+
+		describe("FileHandle.readToEndOfFile") {
+			enum TerminalEvent {
+				case completed, failed, interrupted
+			}
+
+			it("reads a file asynchronously on the main run loop") {
+				let file = Bundle(for: FoundationExtensionsSpec.self)
+					.url(forResource: "test-file", withExtension: "txt")!
+				let handle = try! FileHandle(forReadingFrom: file)
+
+				let contents = handle.reactive.readToEndOfFile(on: .main)
+					.filterMap { String(data: $0, encoding: .utf8) }
+
+				var terminalEvent: TerminalEvent?
+				var values: [String] = []
+
+				contents.start { event in
+					switch event {
+					case let .value(value):
+						values.append(value)
+					case .failed:
+						terminalEvent = .failed
+					case .completed:
+						terminalEvent = .completed
+					case .interrupted:
+						terminalEvent = .interrupted
+					}
+				}
+
+				expect(terminalEvent).toEventually(equal(.completed))
+				expect(values) == ["Hello, world!\n"]
+			}
+
+			it("raises an error if reading fails") {
+				let file = Bundle(for: FoundationExtensionsSpec.self)
+					.url(forResource: "test-file", withExtension: "txt")!
+				let handle = try! FileHandle(forWritingTo: file)
+
+				let contents = handle.reactive.readToEndOfFile(on: .main)
+					.filterMap { String(data: $0, encoding: .utf8) }
+
+				var error: Error?
+				var terminalEvent: TerminalEvent?
+				var values: [String] = []
+
+				contents.start { event in
+					switch event {
+					case let .value(value):
+						values.append(value)
+					case let .failed(anyError):
+						error = anyError.error
+						terminalEvent = .failed
+					case .completed:
+						terminalEvent = .completed
+					case .interrupted:
+						terminalEvent = .interrupted
+					}
+				}
+
+				expect(terminalEvent).toEventually(equal(.failed))
+				expect(error).to(matchErrorCode(POSIXError.ENOMEM))
+				expect(values) == []
 			}
 		}
 
